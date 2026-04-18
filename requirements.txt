@@ -1,0 +1,9 @@
+PyQt6==6.9.1
+pyqt6-qt6==6.9.2
+pyqt6-sip==13.10.2
+openai>=1.0.0
+requests>=2.32.0
+python-dotenv>=1.0.0
+httpx>=0.27.0
+veris-cli
+veris-ai
