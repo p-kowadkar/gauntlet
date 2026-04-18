@@ -40,6 +40,21 @@ class VerisStatusWorker(QThread):
         except Exception:
             self.status_checked.emit(False)
 
+class VoiceSynthWorker(QThread):
+    done = pyqtSignal(str)   # emits audio file path
+
+    def __init__(self, script: str, parent=None):
+        super().__init__(parent)
+        self.script = script
+
+    def run(self):
+        try:
+            from agents.voice_agent import _synthesize_briefing
+            path = _synthesize_briefing(self.script)
+            self.done.emit(path or "")
+        except Exception:
+            self.done.emit("")
+
 
 class GauntletPanel(QWidget):
     def __init__(self, parent=None):
@@ -48,6 +63,9 @@ class GauntletPanel(QWidget):
         self._analysis_worker = None
         self._veris_status_worker = None
         self._last_result = None
+        self._voice_worker = None
+        self._last_analysis = None   # stores last analysis result dict
+        self._code_voice_btn = None
         self._setup_ui()
         self._start_veris_status_check()
 
@@ -346,6 +364,7 @@ class GauntletPanel(QWidget):
         if result.get("error"):
             self._render_analysis_error(result["error"])
             return
+        self._last_analysis = result
         self._render_analysis_result(result)
 
     def _on_analysis_error(self, msg):
@@ -487,6 +506,67 @@ class GauntletPanel(QWidget):
             "font-size: 11px; font-weight: bold; padding: 5px 8px;"
         )
         self.analysis_content_layout.addWidget(verdict_lbl)
+
+        self._code_voice_btn = QPushButton("🔊 Play Voice Briefing")
+        self._code_voice_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._code_voice_btn.setStyleSheet(
+            "background: rgba(92,107,192,0.2); color: #E8E8F0;"
+            "border: 1px solid rgba(92,107,192,0.4); border-radius: 8px;"
+            "padding: 8px 16px; font-size: 12px; font-weight: bold;"
+        )
+        self._code_voice_btn.clicked.connect(self._on_play_code_briefing)
+        self.analysis_content_layout.addWidget(self._code_voice_btn)
+
+    def _on_play_code_briefing(self):
+        if not self._last_analysis:
+            return
+
+        result   = self._last_analysis
+        filename = result.get("filename", "the file")
+        issues   = result.get("static_issues", [])
+        verdict  = self._extract_verdict(result.get("final_verdict", ""))
+        n        = len(issues)
+
+        # Build a concise TTS script from the analysis results
+        criticals = [i for i in issues if i.get("severity", "").upper() == "CRITICAL"]
+        highs     = [i for i in issues if i.get("severity", "").upper() == "HIGH"]
+
+        script = (
+            f"Code analysis complete for {filename}. "
+            f"{n} issue{'s' if n != 1 else ''} detected. "
+        )
+        if criticals:
+            script += (
+                f"{len(criticals)} critical: "
+                + ". ".join(i.get("message", "") for i in criticals[:2]) + ". "
+            )
+        if highs:
+            script += (
+                f"{len(highs)} high severity: "
+                + ". ".join(i.get("message", "") for i in highs[:2]) + ". "
+            )
+        script += f"Final verdict: {verdict}. "
+
+        # Append first sentence of model debate summary if present
+        final = result.get("final_verdict", "")
+        if final:
+            first_sentence = final.split(".")[0].strip()
+            if first_sentence:
+                script += first_sentence + "."
+
+        self._code_voice_btn.setEnabled(False)
+        self._code_voice_btn.setText("⏳ Synthesizing...")
+
+        self._voice_worker = VoiceSynthWorker(script, parent=self)
+        self._voice_worker.done.connect(self._on_code_voice_ready)
+        self._voice_worker.start()
+
+    def _on_code_voice_ready(self, path: str):
+        self._code_voice_btn.setEnabled(True)
+        self._code_voice_btn.setText("🔊 Play Voice Briefing")
+        if path:
+            from agents.voice_agent import _play_audio
+            _play_audio(path)
 
     def _on_run(self):
         spec = self.spec_input.toPlainText().strip()
