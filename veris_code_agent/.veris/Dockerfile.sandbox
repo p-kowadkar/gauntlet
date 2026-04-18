@@ -1,0 +1,14 @@
+ARG GVISOR_BASE
+FROM ${GVISOR_BASE}
+
+# Install dependencies
+COPY requirements.txt /agent/
+RUN pip install -r /agent/requirements.txt
+
+# Copy agent application code
+COPY app /agent/app
+
+# Copy code files to be analyzed (demo_file.py + any others)
+COPY code /agent/code
+
+WORKDIR /agent

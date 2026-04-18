@@ -16,7 +16,7 @@ venv/
 env/
 ENV/
 
-# Environment and secrets
+# Environment and secrets -- NEVER commit API keys
 .env
 .env.*
 !.env.example
@@ -42,8 +42,26 @@ Desktop.ini
 *.log
 briefing.mp3
 report.json
+
+# Gauntlet generated output (audio, reports, screenshots)
+# These live in ~/.gauntlet/ or wherever OUTPUT_DIR points
 screen/
+*.mp3
+*.wav
+
+# Gauntlet user config (local paths, opacity prefs -- not project config)
 .gauntlet/
+
+# Veris CLI auth -- local credentials, never commit
+.veris/config.yaml
+
+# Veris environment ID is project-level config, DO commit:
+# .veris/veris.yaml  <-- keep this
+# .veris/Dockerfile.sandbox  <-- keep this
 
 # Temporary local verification scripts
 _verify_*.py
+
+# Docker build artifacts
+*.tar
+.docker/

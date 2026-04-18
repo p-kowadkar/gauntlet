@@ -1,0 +1,6 @@
+profiles:
+  default:
+    targets:
+      gauntlet-code-analyzer:
+        config_synced_at: '2026-04-18T20:53:24.136320Z'
+        environment_id: env_cogkfaivu954363qgqsm8
