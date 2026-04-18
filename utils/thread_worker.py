@@ -32,3 +32,20 @@ class PipelineWorker(QThread):
             self.pipeline_complete.emit(result)
         except Exception as e:
             self.pipeline_error.emit(str(e))
+
+
+class CodeAnalysisWorker(QThread):
+    analysis_complete = pyqtSignal(dict)
+    analysis_error = pyqtSignal(str)
+
+    def __init__(self, file_path: str, parent=None):
+        super().__init__(parent)
+        self.file_path = file_path
+
+    def run(self):
+        try:
+            from agents.code_analysis_agent import analyze_file
+            result = analyze_file(self.file_path)
+            self.analysis_complete.emit(result)
+        except Exception as e:
+            self.analysis_error.emit(str(e))

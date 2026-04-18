@@ -26,7 +26,7 @@ class StepIndicator(QWidget):
         layout.setSpacing(6)
         self._labels = {}
         for name in STEP_NAMES:
-            lbl = QLabel(f"⏳ {name}")
+            lbl = QLabel(f"○ {name}")
             lbl.setStyleSheet(
                 f"color: {COLORS['text_muted']}; font-size: 11px;"
                 "border: 1px solid rgba(100,100,120,0.3);"
@@ -65,7 +65,7 @@ class StepIndicator(QWidget):
 
     def reset(self):
         for name in STEP_NAMES:
-            self._labels[name].setText(f"⏳ {name}")
+            self._labels[name].setText(f"○ {name}")
             self._labels[name].setStyleSheet(
                 f"color: {COLORS['text_muted']}; font-size: 11px;"
                 "border: 1px solid rgba(100,100,120,0.3);"
