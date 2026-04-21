@@ -48,12 +48,13 @@ def _ping(service: str, key: str) -> tuple[bool, str]:
         import openai
         client = openai.OpenAI(api_key=key)
         # Ping with an actual completion to our fallback model (gpt-5.4-mini).
-        # max_completion_tokens=1 -- costs fractions of a cent, confirms
+        # Keep a small but non-trivial token budget so validation doesn't fail
+        # on short completion limits.
         # both the key AND access to the GPT-5.4 model family we use.
         resp = client.chat.completions.create(
             model=OPENAI_FALLBACK_MODEL,
-            messages=[{"role": "user", "content": "hi"}],
-            max_completion_tokens=1,
+            messages=[{"role": "user", "content": "Respond with: OK"}],
+            max_completion_tokens=32,
         )
         model = resp.model or OPENAI_FALLBACK_MODEL
         return True, f"Connected ✅  (model: {model})"

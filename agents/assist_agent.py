@@ -26,7 +26,28 @@ def _format_model_used(model_name: str) -> str:
     return model_name
 
 
-def _llm_call(messages, max_tokens=1000, json_mode=False, vision=False):
+def _is_token_limit_error(error: Exception) -> bool:
+    msg = str(error).lower()
+    return (
+        "max_tokens or model output limit was reached" in msg
+        or ("max output" in msg and "token" in msg and "reached" in msg)
+    )
+
+
+def _create_completion_with_retry(client, kwargs: dict, is_reasoning: bool):
+    try:
+        return client.chat.completions.create(**kwargs)
+    except Exception as e:
+        if not (is_reasoning and _is_token_limit_error(e)):
+            raise
+
+        retry_kwargs = dict(kwargs)
+        current = int(retry_kwargs.get("max_completion_tokens", 0) or 0)
+        retry_kwargs["max_completion_tokens"] = min(max(current * 2, 1200), 8000)
+        return client.chat.completions.create(**retry_kwargs)
+
+
+def _llm_call(messages, max_tokens=1000, json_mode=False, vision=False, reasoning_effort=None):
     if vision:
         if not baseten_client:
             raise RuntimeError("Vision mode requires Baseten API key configuration.")
@@ -46,15 +67,16 @@ def _llm_call(messages, max_tokens=1000, json_mode=False, vision=False):
         kwargs["response_format"] = {"type": "json_object"}
     if is_reasoning:
         kwargs["max_completion_tokens"] = max_tokens
-        kwargs["reasoning"] = {"effort": OPENAI_REASONING_EFFORT}
+        effort = reasoning_effort or OPENAI_REASONING_EFFORT
+        kwargs["reasoning"] = {"effort": effort}
     else:
         kwargs["max_tokens"] = max_tokens
 
-    resp = client.chat.completions.create(**kwargs)
+    resp = _create_completion_with_retry(client, kwargs, is_reasoning)
     return (resp.choices[0].message.content or ""), model
 
 
-def _llm_call_with_override(messages, model_override, max_tokens=1000, json_mode=False):
+def _llm_call_with_override(messages, model_override, max_tokens=1000, json_mode=False, reasoning_effort=None):
     if model_override == "baseten":
         if not baseten_client:
             raise RuntimeError("Baseten override requested but BASETEN_API_KEY is not configured.")
@@ -76,11 +98,12 @@ def _llm_call_with_override(messages, model_override, max_tokens=1000, json_mode
         kwargs["response_format"] = {"type": "json_object"}
     if is_reasoning:
         kwargs["max_completion_tokens"] = max_tokens
-        kwargs["reasoning"] = {"effort": OPENAI_REASONING_EFFORT}
+        effort = reasoning_effort or OPENAI_REASONING_EFFORT
+        kwargs["reasoning"] = {"effort": effort}
     else:
         kwargs["max_tokens"] = max_tokens
 
-    resp = client.chat.completions.create(**kwargs)
+    resp = _create_completion_with_retry(client, kwargs, is_reasoning)
     return (resp.choices[0].message.content or ""), model
 
 
@@ -132,7 +155,13 @@ def _classify_query(query):
         {"role": "user", "content": query},
     ]
     try:
-        content, _ = _llm_call(messages, max_tokens=200, json_mode=True, vision=False)
+        content, _ = _llm_call(
+            messages,
+            max_tokens=600,
+            json_mode=True,
+            vision=False,
+            reasoning_effort="none",
+        )
         parsed = json.loads(content)
         sub_questions = parsed.get("sub_questions", [])
         if not isinstance(sub_questions, list):

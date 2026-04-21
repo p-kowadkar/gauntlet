@@ -18,6 +18,10 @@ VoiceRun SDK reference (production integration):
                 emit(TextToSpeechEvent(self.briefing_text, voice="nova"))
 """
 import os
+import sys
+import shutil
+import subprocess
+import tempfile
 import json
 from pathlib import Path
 
@@ -51,12 +55,38 @@ def _synthesize_briefing(text: str, voice: str = "nova") -> str:
 def _play_audio(file_path: str) -> bool:
     if not file_path or not os.path.exists(file_path):
         return False
+
+    play_path = file_path
+
+    # Some sandboxed Linux media players (notably snap VLC) cannot open
+    # files from hidden home directories like ~/.gauntlet. Copy to a visible
+    # home subdirectory so xdg-open handlers in sandboxed apps can read it.
+    if os.name != "nt" and sys.platform != "darwin":
+        try:
+            play_dir = Path.home() / "GauntletPlayback"
+            play_dir.mkdir(parents=True, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(
+                prefix="gauntlet_briefing_",
+                suffix=".mp3",
+                dir=str(play_dir),
+            )
+            os.close(fd)
+            shutil.copyfile(file_path, tmp_path)
+            play_path = tmp_path
+        except Exception:
+            play_path = file_path
+
     try:
         if os.name == "nt":
-            os.startfile(file_path)
+            os.startfile(play_path)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", play_path])
         else:
-            import subprocess
-            subprocess.Popen(["xdg-open", file_path])
+            opener = shutil.which("xdg-open")
+            if opener:
+                subprocess.Popen([opener, play_path])
+            else:
+                return False
         return True
     except Exception:
         return False

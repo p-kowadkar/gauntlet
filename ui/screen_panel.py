@@ -1,6 +1,11 @@
 import base64
+import os
+import shutil
+import subprocess
 import time
+from pathlib import Path
 from PyQt6.QtCore import QBuffer, QIODevice, Qt
+from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QPushButton, QHBoxLayout, QApplication
 
 from config import get_output_dir
@@ -30,6 +35,42 @@ class ScreenPanel(AssistPanel):
 
         self._root.insertLayout(0, row)
 
+    def _linux_tool_capture(self, output_dir: Path) -> QPixmap | None:
+        """Fallback capture for Linux sessions where Qt returns an empty pixmap."""
+        if os.name == "nt":
+            return None
+
+        tmp_path = output_dir / f"_capture_{int(time.time() * 1000)}.png"
+        tools = [
+            ("gnome-screenshot", ["gnome-screenshot", "-f", str(tmp_path)]),
+            ("grim", ["grim", str(tmp_path)]),
+        ]
+
+        for tool_name, command in tools:
+            if not shutil.which(tool_name):
+                continue
+            try:
+                proc = subprocess.run(
+                    command,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=12,
+                )
+                if proc.returncode != 0:
+                    continue
+                if not tmp_path.exists() or tmp_path.stat().st_size == 0:
+                    continue
+
+                pm = QPixmap(str(tmp_path))
+                tmp_path.unlink(missing_ok=True)
+                if not pm.isNull() and pm.width() > 0 and pm.height() > 0:
+                    return pm
+            except Exception:
+                continue
+
+        tmp_path.unlink(missing_ok=True)
+        return None
+
     def _on_analyze_screen(self):
         if self._active_worker and self._active_worker.isRunning():
             return
@@ -41,9 +82,30 @@ class ScreenPanel(AssistPanel):
 
         screenshot = screen.grabWindow(0)
 
-        # Save full-resolution PNG to disk for the user's reference
         output_dir = get_output_dir() / "screen"
         output_dir.mkdir(parents=True, exist_ok=True)
+
+        if screenshot.isNull() or screenshot.width() == 0 or screenshot.height() == 0:
+            fallback = self._linux_tool_capture(output_dir)
+            if fallback is not None:
+                screenshot = fallback
+            else:
+                session = os.getenv("XDG_SESSION_TYPE", "unknown").lower()
+                if session == "wayland":
+                    self._add_chat_bubble(
+                        "assistant",
+                        "❌ Screen capture failed on Wayland (empty image from Qt). "
+                        "Install `gnome-screenshot` or `grim`, or run under X11/Xorg.",
+                    )
+                else:
+                    self._add_chat_bubble(
+                        "assistant",
+                        "❌ Screen capture returned an empty image. "
+                        "Try installing `gnome-screenshot` and retry.",
+                    )
+                return
+
+        # Save full-resolution PNG to disk for the user's reference
         timestamp = int(time.time())
         file_path = output_dir / f"screen_{timestamp}.png"
         screenshot.save(str(file_path), "PNG")

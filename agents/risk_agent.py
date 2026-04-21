@@ -14,6 +14,14 @@ baseten_client = openai.OpenAI(
 fallback_client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
 
+def _is_token_limit_error(error: Exception) -> bool:
+    msg = str(error).lower()
+    return (
+        "max_tokens or model output limit was reached" in msg
+        or ("max output" in msg and "token" in msg and "reached" in msg)
+    )
+
+
 def _llm_call(messages: list, max_tokens: int = 500, json_mode: bool = True) -> str:
     client = baseten_client if baseten_client else fallback_client
     model  = BASETEN_MODEL_SLUG if baseten_client else OPENAI_FALLBACK_MODEL
@@ -28,7 +36,17 @@ def _llm_call(messages: list, max_tokens: int = 500, json_mode: bool = True) -> 
     else:
         kwargs["max_tokens"] = max_tokens
 
-    resp = client.chat.completions.create(**kwargs)
+    try:
+        resp = client.chat.completions.create(**kwargs)
+    except Exception as e:
+        if not (is_reasoning and _is_token_limit_error(e)):
+            raise
+
+        retry_kwargs = dict(kwargs)
+        current = int(retry_kwargs.get("max_completion_tokens", 0) or 0)
+        retry_kwargs["max_completion_tokens"] = min(max(current * 2, 1500), 8000)
+        resp = client.chat.completions.create(**retry_kwargs)
+
     return resp.choices[0].message.content
 
 
@@ -56,7 +74,7 @@ Output ONLY this JSON (no markdown):
 }}
 """
     messages = [{"role": "user", "content": prompt}]
-    result = json.loads(_llm_call(messages, max_tokens=500, json_mode=True))
+    result = json.loads(_llm_call(messages, max_tokens=1200, json_mode=True))
     return result
 
 
