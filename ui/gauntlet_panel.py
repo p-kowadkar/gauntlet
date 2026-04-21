@@ -7,10 +7,11 @@ from PyQt6.QtWidgets import (
     QLineEdit, QFileDialog, QFrame
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QTextCursor
 
 from config import DOMAINS
 from ui.components import COLORS, StepIndicator, RiskScoreWidget
-from utils.thread_worker import PipelineWorker, CodeAnalysisWorker
+from utils.thread_worker import PipelineWorker, CodeAnalysisWorker, StreamingCodeAnalysisWorker
 
 
 class VerisStatusWorker(QThread):
@@ -66,6 +67,7 @@ class GauntletPanel(QWidget):
         self._voice_worker = None
         self._last_analysis = None   # stores last analysis result dict
         self._code_voice_btn = None
+        self._analysis_stream_box = None
         self._setup_ui()
         self._start_veris_status_check()
 
@@ -348,14 +350,64 @@ class GauntletPanel(QWidget):
         self.analyze_btn.setText("⏳ Analyzing...")
         self.analyzing_label.show()
         self._clear_analysis_content()
+        self._analysis_stream_box = self._create_analysis_stream_box()
+        self.analysis_content_layout.addWidget(self._analysis_stream_box)
+        self._append_analysis_stream("🚀 Streaming analysis started...\n")
 
-        self._analysis_worker = CodeAnalysisWorker(file_path)
-        self._analysis_worker.analysis_complete.connect(self._on_analysis_complete)
-        self._analysis_worker.analysis_error.connect(self._on_analysis_error)
-        self._analysis_worker.finished.connect(self._on_analysis_finished)
-        self._analysis_worker.start()
+        worker = StreamingCodeAnalysisWorker(file_path)
+        self._analysis_worker = worker
+        worker.stage_update.connect(self._on_analysis_stage_update)
+        worker.token_received.connect(self._on_analysis_token)
+        worker.analysis_complete.connect(self._on_analysis_complete)
+        worker.analysis_error.connect(
+            lambda msg, fp=file_path: self._on_analysis_stream_error(msg, fp)
+        )
+        worker.finished.connect(lambda wk=worker: self._on_analysis_worker_finished(wk))
+        worker.start()
 
-    def _on_analysis_finished(self):
+    def _create_analysis_stream_box(self) -> QTextEdit:
+        box = QTextEdit()
+        box.setReadOnly(True)
+        box.setFixedHeight(180)
+        box.setStyleSheet(
+            f"background: {COLORS['surface']}; color: {COLORS['text']};"
+            "border: 1px solid rgba(92,107,192,0.3); border-radius: 8px;"
+            "font-family: Consolas; font-size: 11px; padding: 8px;"
+        )
+        return box
+
+    def _append_analysis_stream(self, text: str) -> None:
+        if not self._analysis_stream_box:
+            return
+        cursor = self._analysis_stream_box.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertText(text)
+        self._analysis_stream_box.setTextCursor(cursor)
+        self._analysis_stream_box.ensureCursorVisible()
+
+    def _on_analysis_stage_update(self, text: str):
+        self._append_analysis_stream(text)
+
+    def _on_analysis_token(self, token: str):
+        self._append_analysis_stream(token)
+
+    def _on_analysis_stream_error(self, msg: str, file_path: str):
+        self._append_analysis_stream(
+            f"\n⚠️ Streaming failed ({msg}). Falling back to non-stream analysis...\n"
+        )
+        self._start_non_stream_analysis(file_path)
+
+    def _start_non_stream_analysis(self, file_path: str):
+        worker = CodeAnalysisWorker(file_path)
+        self._analysis_worker = worker
+        worker.analysis_complete.connect(self._on_analysis_complete)
+        worker.analysis_error.connect(self._on_analysis_error)
+        worker.finished.connect(lambda wk=worker: self._on_analysis_worker_finished(wk))
+        worker.start()
+
+    def _on_analysis_worker_finished(self, worker: QThread):
+        if self._analysis_worker is not worker:
+            return
         self.analyzing_label.hide()
         self.analyze_btn.setText("🔍 Analyze File")
         self.analyze_btn.setEnabled(bool(self.file_path_input.text().strip()))
@@ -365,9 +417,11 @@ class GauntletPanel(QWidget):
             self._render_analysis_error(result["error"])
             return
         self._last_analysis = result
+        self._analysis_stream_box = None
         self._render_analysis_result(result)
 
     def _on_analysis_error(self, msg):
+        self._analysis_stream_box = None
         self._render_analysis_error(msg)
 
     def _clear_analysis_content(self):
@@ -376,6 +430,7 @@ class GauntletPanel(QWidget):
             w = item.widget()
             if w:
                 w.deleteLater()
+        self._analysis_stream_box = None
 
     def _render_analysis_placeholder(self, text):
         self._clear_analysis_content()

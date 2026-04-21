@@ -1,11 +1,13 @@
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt6.QtGui import QTextCursor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QScrollArea, QFrame,
-    QPushButton, QLineEdit, QLabel, QSizePolicy, QMenu
+    QPushButton, QLineEdit, QLabel, QSizePolicy, QMenu, QTextEdit
 )
 
 from agents.assist_agent import run_assist, run_assist_with_model
 from ui.components import COLORS
+from utils.thread_worker import StreamingAssistWorker
 
 
 class AssistWorker(QThread):
@@ -190,6 +192,40 @@ class AssistPanel(QWidget):
         self._chat_layout.insertWidget(self._chat_layout.count() - 1, wrapper)
         QTimer.singleShot(0, self._scroll_to_bottom)
         return wrapper
+    def _add_streaming_bubble(self) -> tuple[QWidget, QTextEdit]:
+        wrapper = QWidget()
+        row = QHBoxLayout(wrapper)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+
+        bubble = QFrame()
+        bubble.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Maximum)
+        bubble_layout = QVBoxLayout(bubble)
+        bubble_layout.setContentsMargins(10, 8, 10, 8)
+        bubble_layout.setSpacing(6)
+
+        text_view = QTextEdit()
+        text_view.setReadOnly(True)
+        text_view.setMaximumHeight(200)
+        text_view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        text_view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        text_view.setStyleSheet(
+            "font-family: Consolas; font-size: 12px; border: none; background: transparent;"
+        )
+        text_view.setPlainText("⏳ Thinking...")
+        text_view.setProperty("stream_pending_prefix", True)
+        bubble_layout.addWidget(text_view)
+
+        bubble.setStyleSheet(
+            f"background: {COLORS['surface']}; color: {COLORS['text']};"
+            "border: 1px solid rgba(92,107,192,0.25); border-radius: 10px; padding: 2px;"
+        )
+        row.addWidget(bubble, 0, Qt.AlignmentFlag.AlignLeft)
+        row.addStretch()
+
+        self._chat_layout.insertWidget(self._chat_layout.count() - 1, wrapper)
+        QTimer.singleShot(0, self._scroll_to_bottom)
+        return wrapper, text_view
 
     def _model_badge(self, model_used: str) -> str:
         if "Kimi K2.5" in model_used:
@@ -218,26 +254,102 @@ class AssistPanel(QWidget):
         search_enabled = self.search_toggle.isChecked()
         self._add_chat_bubble("user", query)
         self.input.clear()
-        placeholder = self._add_chat_bubble("assistant", "⏳ Thinking...")
-        self._start_worker(query, search_enabled, placeholder, model_override=None, vision_data=None)
+        placeholder, stream_text = self._add_streaming_bubble()
+        self._start_stream_worker(
+            query=query,
+            search_enabled=search_enabled,
+            placeholder_widget=placeholder,
+            stream_text_widget=stream_text,
+            model_override=None,
+        )
 
     def _start_worker(self, query: str, search_enabled: bool, placeholder_widget: QWidget, model_override: str = None, vision_data: str = None):
         self._set_busy(True)
-        self._active_worker = AssistWorker(
+        worker = AssistWorker(
             query=query,
             search_enabled=search_enabled,
             model_override=model_override,
             vision_data=vision_data,
             parent=self,
         )
-        self._active_worker.result_ready.connect(
+        self._active_worker = worker
+        worker.result_ready.connect(
             lambda result, w=placeholder_widget, q=query, s=search_enabled: self._on_result(result, w, q, s)
         )
-        self._active_worker.error.connect(
+        worker.error.connect(
             lambda msg, w=placeholder_widget: self._on_error(msg, w)
         )
-        self._active_worker.finished.connect(lambda: self._set_busy(False))
-        self._active_worker.start()
+        worker.finished.connect(lambda wk=worker: self._on_worker_finished(wk))
+        worker.start()
+
+    def _start_stream_worker(
+        self,
+        query: str,
+        search_enabled: bool,
+        placeholder_widget: QWidget,
+        stream_text_widget: QTextEdit,
+        model_override: str | tuple[str, str] | None = None,
+    ):
+        self._set_busy(True)
+        worker = StreamingAssistWorker(
+            query=query,
+            search_enabled=search_enabled,
+            role="primary_llm",
+            model_override=model_override,
+            parent=self,
+        )
+        self._active_worker = worker
+        worker.token_received.connect(
+            lambda token, t=stream_text_widget: self._on_stream_token(token, t)
+        )
+        worker.stream_complete.connect(
+            lambda result, w=placeholder_widget, q=query, s=search_enabled: self._on_stream_complete(result, w, q, s)
+        )
+        worker.stream_error.connect(
+            lambda msg, w=placeholder_widget, t=stream_text_widget, q=query, s=search_enabled, m=model_override: self._on_stream_error(msg, w, t, q, s, m)
+        )
+        worker.finished.connect(lambda wk=worker: self._on_worker_finished(wk))
+        worker.start()
+
+    def _on_worker_finished(self, worker: QThread):
+        if self._active_worker is worker:
+            self._set_busy(False)
+
+    def _on_stream_token(self, token: str, text_widget: QTextEdit):
+        if text_widget.property("stream_pending_prefix"):
+            text_widget.clear()
+            text_widget.setProperty("stream_pending_prefix", False)
+        text_widget.moveCursor(QTextCursor.MoveOperation.End)
+        text_widget.insertPlainText(token)
+        QTimer.singleShot(0, self._scroll_to_bottom)
+
+    def _on_stream_complete(self, result: dict, placeholder_widget: QWidget, query: str, search_enabled: bool):
+        self._remove_chat_widget(placeholder_widget)
+        self._add_chat_bubble(
+            "assistant",
+            result.get("content", ""),
+            model_used=result.get("model_used", ""),
+            query=query,
+            search_enabled=search_enabled,
+        )
+
+    def _on_stream_error(
+        self,
+        msg: str,
+        placeholder_widget: QWidget,
+        text_widget: QTextEdit,
+        query: str,
+        search_enabled: bool,
+        model_override: str | tuple[str, str] | None,
+    ):
+        text_widget.setPlainText("⚠️ Streaming unavailable. Falling back...")
+        self._start_worker(
+            query=query,
+            search_enabled=search_enabled,
+            placeholder_widget=placeholder_widget,
+            model_override=model_override if isinstance(model_override, str) else None,
+            vision_data=None,
+        )
 
     def _remove_chat_widget(self, widget: QWidget):
         self._chat_layout.removeWidget(widget)
@@ -275,11 +387,11 @@ class AssistPanel(QWidget):
         else:
             return
 
-        placeholder = self._add_chat_bubble("assistant", "⏳ Thinking...")
-        self._start_worker(
+        placeholder, stream_text = self._add_streaming_bubble()
+        self._start_stream_worker(
             query=query,
             search_enabled=search_enabled,
             placeholder_widget=placeholder,
             model_override=model_override,
-            vision_data=None,
+            stream_text_widget=stream_text,
         )

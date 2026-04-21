@@ -117,9 +117,8 @@ def _assist_messages_for_query(query, search_results):
     ]
 
 
-def _run_text_assist(query: str, search_enabled: bool, role_override: tuple[str, str] | None = None):
-    router = _router()
-
+def prepare_assist_request(query: str, search_enabled: bool) -> dict:
+    query = (query or "").strip()
     if search_enabled:
         classification = _classify_query(query)
         raw_results = []
@@ -137,16 +136,8 @@ def _run_text_assist(query: str, search_enabled: bool, role_override: tuple[str,
                 raw_results = _search_youcom(query, 8)
         raw_results = _dedupe_keep_order(raw_results)
         messages = _assist_messages_for_query(query, raw_results)
-        content, model_name = router.chat(
-            role="primary_llm",
-            role_override=role_override,
-            messages=messages,
-            max_tokens=1000,
-            json_mode=False,
-        )
         return {
-            "content": content.strip(),
-            "model_used": model_name,
+            "messages": messages,
             "search_results": raw_results,
             "sources": raw_results[:5],
         }
@@ -155,6 +146,17 @@ def _run_text_assist(query: str, search_enabled: bool, role_override: tuple[str,
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": query},
     ]
+    return {
+        "messages": messages,
+        "search_results": [],
+        "sources": [],
+    }
+
+
+def _run_text_assist(query: str, search_enabled: bool, role_override: tuple[str, str] | None = None):
+    router = _router()
+    prepared = prepare_assist_request(query=query, search_enabled=search_enabled)
+    messages = prepared.get("messages", [])
     content, model_name = router.chat(
         role="primary_llm",
         role_override=role_override,
@@ -165,8 +167,8 @@ def _run_text_assist(query: str, search_enabled: bool, role_override: tuple[str,
     return {
         "content": content.strip(),
         "model_used": model_name,
-        "search_results": [],
-        "sources": [],
+        "search_results": prepared.get("search_results", []),
+        "sources": prepared.get("sources", []),
     }
 
 

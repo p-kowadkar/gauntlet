@@ -100,9 +100,22 @@ class ModelRouter:
         if stream:
             kwargs["stream"] = True
             chunks: list[str] = []
-            resp = client.chat.completions.create(**kwargs)
+            try:
+                resp = client.chat.completions.create(**kwargs)
+            except Exception as e:
+                msg = str(e).lower()
+                if "unexpected keyword argument 'reasoning'" in msg and "reasoning" in kwargs:
+                    retry = dict(kwargs)
+                    retry.pop("reasoning", None)
+                    resp = client.chat.completions.create(**retry)
+                else:
+                    raise
             for chunk in resp:
-                delta = chunk.choices[0].delta.content or ""
+                choices = getattr(chunk, "choices", None) or []
+                if not choices:
+                    continue
+                delta_obj = getattr(choices[0], "delta", None)
+                delta = getattr(delta_obj, "content", None) or ""
                 if delta:
                     chunks.append(delta)
             return "".join(chunks), model_id
@@ -343,6 +356,10 @@ class ModelRouter:
             return client.chat.completions.create(**kwargs)
         except Exception as e:
             msg = str(e).lower()
+            if "unexpected keyword argument 'reasoning'" in msg and "reasoning" in kwargs:
+                retry_no_reasoning = dict(kwargs)
+                retry_no_reasoning.pop("reasoning", None)
+                return client.chat.completions.create(**retry_no_reasoning)
             is_token_error = (
                 "max_tokens or model output limit was reached" in msg
                 or ("max output" in msg and "token" in msg and "reached" in msg)
@@ -404,8 +421,22 @@ class ModelRouter:
                 effort=None,
             )
             kwargs["stream"] = True
-            for chunk in client.chat.completions.create(**kwargs):
-                delta = chunk.choices[0].delta.content or ""
+            try:
+                stream_resp = client.chat.completions.create(**kwargs)
+            except Exception as e:
+                msg = str(e).lower()
+                if "unexpected keyword argument 'reasoning'" in msg and "reasoning" in kwargs:
+                    retry = dict(kwargs)
+                    retry.pop("reasoning", None)
+                    stream_resp = client.chat.completions.create(**retry)
+                else:
+                    raise
+            for chunk in stream_resp:
+                choices = getattr(chunk, "choices", None) or []
+                if not choices:
+                    continue
+                delta_obj = getattr(choices[0], "delta", None)
+                delta = getattr(delta_obj, "content", None) or ""
                 if delta:
                     full_content.append(delta)
                     yield delta, False

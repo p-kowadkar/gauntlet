@@ -31,6 +31,8 @@ def _select_secondary_override(primary_model: str) -> tuple[str, str] | None:
     for provider_id, model_id in FALLBACK_CHAINS.get("classifier", []):
         if not model_id:
             continue
+        if provider_id == "openrouter" and not cfg.get_api_key("openrouter"):
+            continue
         if model_id == primary_model:
             continue
         if cfg.provider_available(provider_id, model_id):
